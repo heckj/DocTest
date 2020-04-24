@@ -1,6 +1,8 @@
 import ArgumentParser
 import DocTest
 import Foundation
+import Logging
+import LoggingGitHubActions
 import TAP
 // Pattern borrowed upstream from Swift: 
 // https://github.com/apple/swift/blob/87d3b4d984281b113ffad503cdb1d82b9f0ae5b9/test/Interpreter/SDK/libc.swift#L12-L17
@@ -11,6 +13,16 @@ import TAP
 #elseif os(Windows)
   import MSVCRT
 #endif
+
+LoggingSystem.bootstrap { label in
+    if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" {
+        return GitHubActionsLogHandler.standardOutput(label: label)
+    } else {
+        return StreamLogHandler.standardOutput(label: label)
+    }
+}
+
+let logger = Logger(label: "org.swiftdoc.doctest")
 
 let fileManager = FileManager.default
 
@@ -73,10 +85,20 @@ struct SwiftDocTest: ParsableCommand {
             else { return }
             let match = source[range]
 
-            let runner = try! Runner(source: String(match), assumedFileName: assumedFileName)
-
+            var runner: Runner?
+            do {
+                runner = try Runner(source: String(match), assumedFileName: assumedFileName)
+            } catch {
+                logger.error("\(error)")
+                // Return a non-zero result code if we couldn't create the runner
+                #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+                Darwin.exit(EXIT_FAILURE)
+                #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
+                Glibc.exit(EXIT_FAILURE)
+                #endif
+            }
             group.enter()
-            runner.run(with: configuration) { (result) in
+            runner?.run(with: configuration) { (result) in
                 switch result {
                 case .failure(let error):
                     reports.append(Report(results: [.failure(BailOut("\(error)"))]))
